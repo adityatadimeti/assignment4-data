@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
-from data_parsing import extract_text, identify_language, mask_email, mask_phone_numbers
+from data_parsing import extract_text, identify_language, mask_email, mask_phone_numbers, mask_ip_addresses, nsfw, toxic
 
 
 
@@ -22,15 +22,15 @@ def run_mask_phone_numbers(text: str) -> tuple[str, int]:
 
 
 def run_mask_ips(text: str) -> tuple[str, int]:
-    raise NotImplementedError
+    return mask_ip_addresses(text)
 
 
 def run_classify_nsfw(text: str) -> tuple[Any, float]:
-    raise NotImplementedError
+    return nsfw(text)
 
 
 def run_classify_toxic_speech(text: str) -> tuple[Any, float]:
-    raise NotImplementedError
+    return toxic(text)
 
 
 def run_classify_quality(text: str) -> tuple[Any, float]:
