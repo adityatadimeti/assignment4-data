@@ -66,6 +66,18 @@ def mask_email(input):
     masked_string = re.sub(email_regex, "|||EMAIL_ADDRESS|||", input, flags=re.IGNORECASE)
     return masked_string, count
 
+import re
+
+def mask_phone_numbers(text):
+    phone_pattern = r'''(?:(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}(?:\s?(?:ext|x|ext\.)\s?\d{1,5})?)'''
+    
+    pattern = re.compile(phone_pattern, re.VERBOSE)
+    
+    matches = pattern.findall(text)
+    count = len(matches)
+    masked_text = pattern.sub("|||PHONE_NUMBER|||", text)
+    return masked_text, count
+
 def test_language_identification(warc_path):
     extracted_records = extract_random_examples(warc_path=warc_path)
     print(extracted_records)
