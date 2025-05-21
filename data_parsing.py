@@ -6,6 +6,9 @@ from fastwarc.warc import ArchiveIterator, WarcRecordType
 import resiliparse
 from resiliparse.parse.encoding import detect_encoding
 from resiliparse.extract.html2text import extract_plain_text
+import nltk
+nltk.download('punkt_tab')
+from nltk.tokenize import word_tokenize
 
 import fasttext
 
@@ -83,11 +86,38 @@ def mask_ip_addresses(text):
    masked_text = re.sub(pattern, "|||IP_ADDRESS|||", text)
    return masked_text, len(matches)
 
+def test_classifier(warc_path, classifier_fn, name="classifier"):
+   extracted_records = extract_random_examples(warc_path=warc_path)
+   print(f"Testing {name} on {len(extracted_records)} records")
+   results = [classifier_fn(record) for record in extracted_records]
+   print(f"{name.capitalize()} results:", results)
+   return extracted_records, results
+
 def test_language_identification(warc_path):
+   return test_classifier(warc_path, identify_language, "language identification")
+
+def test_safety_classification(warc_path):
+    # Extract records once and reuse for both classifiers
     extracted_records = extract_random_examples(warc_path=warc_path)
-    print(extracted_records)
-    languages = [identify_language(record) for record in extracted_records]
-    breakpoint()
+    print(f"Testing safety classifiers on {len(extracted_records)} records")
+    
+    # Run both classifiers on the same records
+    nsfw_results = [nsfw(record) for record in extracted_records]
+    toxic_results = [toxic(record) for record in extracted_records]
+    
+    print("NSFW results:", nsfw_results)
+    print("Toxicity results:", toxic_results)
+    
+    # Combine results for analysis
+    safety_results = []
+    for i, record in enumerate(extracted_records):
+        safety_results.append({
+            "text_excerpt": record,
+            "nsfw": nsfw_results[i],
+            "toxic": toxic_results[i]
+        })
+    
+    return safety_results
 
 def nsfw(text):
    return classify_text(text, "/data/classifiers/dolma_fasttext_nsfw_jigsaw_model.bin")
@@ -95,6 +125,35 @@ def nsfw(text):
 def toxic(text):
    return classify_text(text, "/data/classifiers/dolma_fasttext_hatespeech_jigsaw_model.bin")
 
+def gopher(text):
+    if not text:
+        return False
+    
+    words = word_tokenize(text)
+    lines = text.splitlines()
+    
+    word_count = len(words)
+    if word_count < 50 or word_count > 100000:
+        return False
+    
+    mean_word_length = sum(len(word) for word in words) / word_count if word_count > 0 else 0
+    if mean_word_length < 3 or mean_word_length > 10:
+        return False
+    
+    if lines:
+        ellipsis_percentage = sum(1 for line in lines if line.strip().endswith("...")) / len(lines)
+        if ellipsis_percentage > 0.3:
+            return False
+    
+    alpha_percentage = sum(1 for word in words if any(c.isalpha() for c in word)) / word_count if word_count > 0 else 0
+    if alpha_percentage < 0.8:
+        return False
+    
+    return True
+
+
 if __name__ == "__main__":
-    warc_path = "/Users/adityatadimeti/assignment4-data/CC-MAIN-20250417135010-20250417165010-00065.warc.gz"
-    test_language_identification(warc_path)
+    warc_path = "/data/CC/example.warc.gz"
+    wet_path =  "/data/CC/example.warc.wet.gz"
+    safety_results = test_safety_classification(warc_path)
+    breakpoint()
