@@ -1,5 +1,7 @@
 import gzip
 import os
+import mmh3
+from collections import defaultdict
 import random
 import re
 from fastwarc.warc import ArchiveIterator, WarcRecordType
@@ -9,6 +11,8 @@ from resiliparse.extract.html2text import extract_plain_text
 import nltk
 nltk.download('punkt_tab')
 from nltk.tokenize import word_tokenize
+import unicodedata
+
 
 import fasttext
 
@@ -151,9 +155,124 @@ def gopher(text):
     
     return True
 
+def deduplicate_lines(input_paths, output_dir):
+    line_counts = defaultdict(int)
+    
+    for path in input_paths:
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line_hash = mmh3.hash(line)
+                line_counts[line_hash] += 1
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    for path in input_paths:
+        output_path = os.path.join(output_dir, os.path.basename(path))
+        with open(path, 'r', encoding='utf-8') as infile:
+            with open(output_path, 'w', encoding='utf-8') as outfile:
+                for line in infile:
+                    line_hash = mmh3.hash(line)
+                    if line_counts[line_hash] == 1:
+                        outfile.write(line)
+                        
+def normalize_text(text):
+    text = unicodedata.normalize('NFD', text)
+    text = text.lower()
+    text = re.sub(r'[^\w\s]', ' ', text)
+    text = re.sub(r'\s+', ' ', text)
+    text = ''.join(c for c in text if not unicodedata.combining(c))
+    return text.strip()
+
+def get_ngrams(text, n):
+    words = text.split()
+    return [' '.join(words[i:i+n]) for i in range(len(words) - n + 1)]
+
+def compute_minhash_signature(ngrams, num_hashes):
+    signature = []
+    for i in range(num_hashes):
+        min_hash = float('inf')
+        for ngram in ngrams:
+            hash_val = mmh3.hash(ngram, seed=i) & 0x7FFFFFFF
+            min_hash = min(min_hash, hash_val)
+        signature.append(min_hash if ngrams else 0)
+    return signature
+
+def compute_jaccard_similarity(ngrams1, ngrams2):
+    set1 = set(ngrams1)
+    set2 = set(ngrams2)
+    intersection = len(set1 & set2)
+    union = len(set1 | set2)
+    return intersection / union if union > 0 else 0
+
+def minhash_deduplication(input_paths, num_hashes, num_bands, ngram_length, threshold, output_dir):
+    rows_per_band = num_hashes // num_bands
+    
+    documents = []
+    signatures = []
+    
+    for path in input_paths:
+        with open(path, 'r', encoding='utf-8') as f:
+            content = f.read()
+            normalized = normalize_text(content)
+            ngrams = get_ngrams(normalized, ngram_length)
+            signature = compute_minhash_signature(set(ngrams), num_hashes)
+            documents.append((path, content, ngrams))
+            signatures.append(signature)
+    
+    buckets = defaultdict(list)
+    for doc_idx, signature in enumerate(signatures):
+        for band_idx in range(num_bands):
+            band_start = band_idx * rows_per_band
+            band_end = band_start + rows_per_band
+            band = tuple(signature[band_start:band_end])
+            bucket_key = (band_idx, band)
+            buckets[bucket_key].append(doc_idx)
+    
+    candidate_pairs = set()
+    for bucket_docs in buckets.values():
+        if len(bucket_docs) > 1:
+            for i in range(len(bucket_docs)):
+                for j in range(i + 1, len(bucket_docs)):
+                    pair = tuple(sorted([bucket_docs[i], bucket_docs[j]]))
+                    candidate_pairs.add(pair)
+    
+    duplicate_graph = defaultdict(set)
+    for idx1, idx2 in candidate_pairs:
+        _, _, ngrams1 = documents[idx1]
+        _, _, ngrams2 = documents[idx2]
+        similarity = compute_jaccard_similarity(ngrams1, ngrams2)
+        if similarity >= threshold:
+            duplicate_graph[idx1].add(idx2)
+            duplicate_graph[idx2].add(idx1)
+    
+    visited = set()
+    clusters = []
+    for idx in range(len(documents)):
+        if idx not in visited:
+            cluster = []
+            stack = [idx]
+            while stack:
+                node = stack.pop()
+                if node not in visited:
+                    visited.add(node)
+                    cluster.append(node)
+                    stack.extend(duplicate_graph[node])
+            clusters.append(cluster)
+    
+    docs_to_keep = set()
+    for cluster in clusters:
+        chosen = random.choice(cluster)
+        docs_to_keep.add(chosen)
+    
+    os.makedirs(output_dir, exist_ok=True)
+    
+    for idx in docs_to_keep:
+        path, content, _ = documents[idx]
+        output_path = os.path.join(output_dir, os.path.basename(path))
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write(content)
 
 if __name__ == "__main__":
     warc_path = "/data/CC/example.warc.gz"
     wet_path =  "/data/CC/example.warc.wet.gz"
     safety_results = test_safety_classification(warc_path)
-    breakpoint()
